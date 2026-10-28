@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>لعبة الفخ🎯</title>
+<style>
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:linear-gradient(145deg,#1a1a2e,#16213e);
+    display:flex; justify-content:center; align-items:center;
+    min-height:100vh; font-family:sans-serif; user-select:none;
+  }
+  .game-wrapper{
+    background:#0f3460; padding:20px; border-radius:24px;
+    box-shadow:0 20px 60px rgba(0,0,0,.7); max-width:100%;
+  }
+  #gameCanvas{
+    display:block; width:min(600px,86vw); height:auto; aspect-ratio:1/1;
+    border-radius:16px; cursor:pointer; background:#1a1a2e;
+  }
+  .hud{
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;
+    margin-top:16px; padding:0 8px; color:#eee; font-size:20px; font-weight:bold;
+  }
+  .hud .pill{ background:rgba(255,255,255,.1); padding:6px 16px; border-radius:30px; }
+  .hud .best{ color:#f4c95d; }
+  .hud .lvl{ color:#4ecca3; }
+  button{
+    border:none; color:#fff; padding:8px 24px; border-radius:30px;
+    font-size:18px; cursor:pointer; font-weight:bold; transition:transform .1s;
+  }
+  button:active{ transform:scale(.94); }
+  #restartBtn{ background:#e94560; }
+  #nextBtn{ background:#4ecca3; color:#0f3460; display:none; }
+  #message{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-size:clamp(30px,9vw,56px); font-weight:900; pointer-events:none;
+    text-shadow:0 4px 20px rgba(0,0,0,.8); text-align:center; white-space:nowrap;
+  }
+  .container{ position:relative; }
+  .picker{ display:flex; align-items:center; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:14px; color:#eee; font-weight:bold; font-size:16px; }
+  .plist{ display:flex; gap:6px; flex-wrap:wrap; justify-content:center; }
+  .emo{ width:44px; height:44px; padding:0; font-size:24px; border-radius:12px; background:rgba(255,255,255,.1); display:inline-flex; align-items:center; justify-content:center; overflow:hidden; border:2px solid transparent; }
+  .emo.sel{ border-color:#f4c95d; background:rgba(244,201,93,.2); }
+  .emo img{ width:100%; height:100%; object-fit:cover; }
+  .upl{ background:#4ecca3; color:#0f3460; padding:8px 16px; border-radius:30px; cursor:pointer; font-size:16px; }
+  #clearImg{ background:#e94560; padding:8px 14px; font-size:16px; }
+</style>
+</head>
+<body>
+<div class="game-wrapper">
+  <div class="container">
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+    <div id="message"></div>
+  </div>
+  <div class="hud">
+    <span class="pill lvl">🎚️ المستوى <span id="levelDisplay">1</span>/6</span>
+    <span class="pill">💣 <span id="trapsDisplay">1</span></span>
+    <span class="pill">🏆 <span id="scoreDisplay">0</span></span>
+    <span class="pill best">⭐ <span id="bestDisplay">0</span></span>
+  </div>
+  <div class="picker">
+    <span>🎨 صورة الفخ:</span>
+    <div id="emojiList" class="plist"></div>
+    <label class="upl">📷 رفع صورة<input type="file" id="trapFile" accept="image/*" hidden></label>
+    <button type="button" id="clearImg" style="display:none">❌ حذف الصورة</button>
+  </div>
+  <div class="picker">
+    <span>❓ صورة الخلية المخفية:</span>
+    <span id="hiddenPreview" class="emo sel">❓</span>
+    <label class="upl">📷 رفع صورة<input type="file" id="hiddenFile" accept="image/*" hidden></label>
+    <button type="button" id="clearHidden" style="display:none">❌ حذف الصورة</button>
+  </div>
+  <div class="picker">
+    <span>✅ صورة الخلية الآمنة:</span>
+    <span id="safePreview" class="emo sel">✅</span>
+    <label class="upl">📷 رفع صورة<input type="file" id="safeFile" accept="image/*" hidden></label>
+    <button type="button" id="clearSafe" style="display:none">❌ حذف الصورة</button>
+  </div>
+  <div class="hud" style="justify-content:center">
+    <button id="nextBtn">➡️ المستوى التالي</button>
+    <button id="restartBtn">🔄 إعادة</button>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const bestDisplay = document.getElementById('bestDisplay');
+const levelDisplay = document.getElementById('levelDisplay');
+const trapsDisplay = document.getElementById('trapsDisplay');
+const messageEl = document.getElementById('message');
+const nextBtn = document.getElementById('nextBtn');
+
+const ROWS = 6, COLS = 6;
+const CELL_SIZE = 100;
+const MAX_LEVEL = 6;            // عدد المستويات
+const SHOW_DURATION = 2;        // مدة إظهار الخلايا بالثواني
+
+// عدد الفخاخ = رقم المستوى (1 → 6)
+let level = 1;
+function trapsCount(){ return level; }
+function totalSafe(){ return ROWS * COLS - trapsCount(); }
+
+// ---------- الأصوات ----------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function playTone(freq, dur, type='sine', vol=0.2) {
+  try {
+    ensureAudio();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type; osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(vol, audioCtx.currentTime+0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+dur);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime+dur);
+  } catch(e){}
+}
+function sndClick(){ playTone(660, 0.08, 'sine', 0.15); }
+function sndTrap(){ playTone(160, 0.4, 'sawtooth', 0.3); }
+function sndWin(){ playTone(523, 0.1); setTimeout(()=>playTone(659,0.1),120); setTimeout(()=>playTone(784,0.2),240); }
+function sndStart(){ playTone(440,0.06); setTimeout(()=>playTone(554,0.06),80); }
+
+// ---------- أفضل نتيجة ----------
+function loadBest(){
+  try { return parseInt(localStorage.getItem('trapGameBest')||'0',10) || 0; } catch(e){ return 0; }
+}
+function saveBest(v){
+  try { localStorage.setItem('trapGameBest', String(v)); } catch(e){}
+}
+let bestScore = loadBest();
+bestDisplay.textContent = bestScore;
+
+// ---------- حالة اللعبة ----------
+let grid = [], revealed = [];
+let score = 0;
+let gameOver = false;
+let win = false;
+let showAll = true;
+let showStartTime = 0;
+
+function generateGrid() {
+  grid = Array.from({length: ROWS}, () => Array(COLS).fill(0));
+  let placed = 0;
+  while (placed < trapsCount()) {
+    const r = Math.floor(Math.random() * ROWS);
+    const c = Math.floor(Math.random() * COLS);
+    if (grid[r][c] === 0) { grid[r][c] = 1; placed++; }
+  }
+  revealed = Array.from({length: ROWS}, () => Array(COLS).fill(false));
+}
+
+// بدء مستوى (دون تصفير النتيجة)
+function startLevel() {
+  generateGrid();
+  gameOver = false;
+  win = false;
+  showAll = true;
+  showStartTime = performance.now() / 1000;
+  messageEl.textContent = '';
+  nextBtn.style.display = 'none';
+  levelDisplay.textContent = level;
+  trapsDisplay.textContent = trapsCount();
+  scoreDisplay.textContent = score;
+  sndStart();
+  draw();
+}
+
+// إعادة اللعبة كاملة من المستوى 1
+function resetGame() {
+  level = 1;
+  score = 0;
+  startLevel();
+}
+
+function nextLevel() {
+  if (level < MAX_LEVEL) { level++; startLevel(); }
+}
+
+// ---------- اختيار صورة الفخ ----------
+const TRAP_EMOJIS = ['💣','💀','🐍','🦂','🕷️','👻','🔥','🦈','👹'];
+let trapEmoji = '💣';
+let trapImg = null;
+function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+function lsDel(k){ try { localStorage.removeItem(k); } catch(e){} }
+
+function renderPicker() {
+  const box = document.getElementById('emojiList');
+  box.innerHTML = '';
+  TRAP_EMOJIS.forEach(e => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'emo' + (!trapImg && e === trapEmoji ? ' sel' : '');
+    b.textContent = e;
+    b.onclick = () => {
+      trapImg = null; trapEmoji = e;
+      lsSet('trapGameEmoji', e); lsDel('trapGameImg');
+      renderPicker(); if (grid.length) draw();
+    };
+    box.appendChild(b);
+  });
+  if (trapImg) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'emo sel';
+    const im = document.createElement('img'); im.src = trapImg.src;
+    b.appendChild(im); box.appendChild(b);
+  }
+  document.getElementById('clearImg').style.display = trapImg ? 'inline-block' : 'none';
+}
+
+function setTrapImage(src) {
+  const im = new Image();
+  im.onload = () => { trapImg = im; renderPicker(); if (grid.length) draw(); };
+  im.src = src;
+}
+
+document.getElementById('trapFile').addEventListener('change', ev => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const tmp = new Image();
+    tmp.onload = () => {
+      // قص مربع من الوسط وتصغير الصورة لتخفيف الحجم
+      const S = 200, c = document.createElement('canvas');
+      c.width = c.height = S;
+      const s = Math.min(tmp.naturalWidth, tmp.naturalHeight);
+      c.getContext('2d').drawImage(tmp, (tmp.naturalWidth-s)/2, (tmp.naturalHeight-s)/2, s, s, 0, 0, S, S);
+      const url = c.toDataURL('image/jpeg', 0.85);
+      lsSet('trapGameImg', url);
+      setTrapImage(url);
+    };
+    tmp.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+  ev.target.value = '';
+});
+
+document.getElementById('clearImg').addEventListener('click', () => {
+  trapImg = null; lsDel('trapGameImg');
+  renderPicker(); if (grid.length) draw();
+});
+
+(function initTrapChoice(){
+  const e = lsGet('trapGameEmoji');
+  if (e && TRAP_EMOJIS.includes(e)) trapEmoji = e;
+  renderPicker();
+  const img = lsGet('trapGameImg');
+  if (img) setTrapImage(img);
+})();
+
+// ---------- صورة الخلية المخفية (بدل علامة الاستفهام) ----------
+let hiddenImg = null;
+
+function renderHiddenPicker() {
+  const p = document.getElementById('hiddenPreview');
+  p.innerHTML = '';
+  if (hiddenImg) {
+    const im = document.createElement('img');
+    im.src = hiddenImg.src;
+    p.appendChild(im);
+  } else {
+    p.textContent = '❓';
+  }
+  document.getElementById('clearHidden').style.display = hiddenImg ? 'inline-block' : 'none';
+}
+
+function setHiddenImage(src) {
+  const im = new Image();
+  im.onload = () => { hiddenImg = im; renderHiddenPicker(); if (grid.length) draw(); };
+  im.src = src;
+}
+
+document.getElementById('hiddenFile').addEventListener('change', ev => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const tmp = new Image();
+    tmp.onload = () => {
+      const S = 200, c = document.createElement('canvas');
+      c.width = c.height = S;
+      const s = Math.min(tmp.naturalWidth, tmp.naturalHeight);
+      c.getContext('2d').drawImage(tmp, (tmp.naturalWidth-s)/2, (tmp.naturalHeight-s)/2, s, s, 0, 0, S, S);
+      const url = c.toDataURL('image/jpeg', 0.85);
+      lsSet('trapGameHidden', url);
+      setHiddenImage(url);
+    };
+    tmp.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+  ev.target.value = '';
+});
+
+document.getElementById('clearHidden').addEventListener('click', () => {
+  hiddenImg = null; lsDel('trapGameHidden');
+  renderHiddenPicker(); if (grid.length) draw();
+});
+
+(function initHiddenChoice(){
+  renderHiddenPicker();
+  const img = lsGet('trapGameHidden');
+  if (img) setHiddenImage(img);
+})();
+
+// ---------- صورة الخلية الآمنة (بدل علامة ✅) ----------
+let safeImg = null;
+
+function renderSafePicker() {
+  const p = document.getElementById('safePreview');
+  p.innerHTML = '';
+  if (safeImg) {
+    const im = document.createElement('img');
+    im.src = safeImg.src;
+    p.appendChild(im);
+  } else {
+    p.textContent = '✅';
+  }
+  document.getElementById('clearSafe').style.display = safeImg ? 'inline-block' : 'none';
+}
+
+function setSafeImage(src) {
+  const im = new Image();
+  im.onload = () => { safeImg = im; renderSafePicker(); if (grid.length) draw(); };
+  im.src = src;
+}
+
+document.getElementById('safeFile').addEventListener('change', ev => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const tmp = new Image();
+    tmp.onload = () => {
+      const S = 200, c = document.createElement('canvas');
+      c.width = c.height = S;
+      const s = Math.min(tmp.naturalWidth, tmp.naturalHeight);
+      c.getContext('2d').drawImage(tmp, (tmp.naturalWidth-s)/2, (tmp.naturalHeight-s)/2, s, s, 0, 0, S, S);
+      const url = c.toDataURL('image/jpeg', 0.85);
+      lsSet('trapGameSafe', url);
+      setSafeImage(url);
+    };
+    tmp.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+  ev.target.value = '';
+});
+
+document.getElementById('clearSafe').addEventListener('click', () => {
+  safeImg = null; lsDel('trapGameSafe');
+  renderSafePicker(); if (grid.length) draw();
+});
+
+(function initSafeChoice(){
+  renderSafePicker();
+  const img = lsGet('trapGameSafe');
+  if (img) setSafeImage(img);
+})();
+
+function drawCell(r, c, type, hidden=false) {
+  const x = c * CELL_SIZE, y = r * CELL_SIZE;
+  ctx.fillStyle = hidden ? '#2d4059' : (type===1 ? '#e94560' : '#4ecca3');
+  ctx.shadowColor = 'rgba(0,0,0,.3)';
+  ctx.shadowBlur = 8;
+  ctx.fillRect(x+2, y+2, CELL_SIZE-4, CELL_SIZE-4);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(255,255,255,.15)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x+2, y+2, CELL_SIZE-4, CELL_SIZE-4);
+  ctx.font = '48px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  if (hidden) {
+    if (hiddenImg && hiddenImg.naturalWidth) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x+6, y+6, CELL_SIZE-12, CELL_SIZE-12); ctx.clip();
+      const s = Math.min(hiddenImg.naturalWidth, hiddenImg.naturalHeight);
+      ctx.drawImage(hiddenImg, (hiddenImg.naturalWidth-s)/2, (hiddenImg.naturalHeight-s)/2, s, s, x+6, y+6, CELL_SIZE-12, CELL_SIZE-12);
+      ctx.restore();
+    } else {
+      ctx.fillText('❓', x+CELL_SIZE/2, y+CELL_SIZE/2);
+    }
+  }
+  else if (type === 1) {
+    if (trapImg && trapImg.naturalWidth) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x+6, y+6, CELL_SIZE-12, CELL_SIZE-12); ctx.clip();
+      const s = Math.min(trapImg.naturalWidth, trapImg.naturalHeight);
+      ctx.drawImage(trapImg, (trapImg.naturalWidth-s)/2, (trapImg.naturalHeight-s)/2, s, s, x+6, y+6, CELL_SIZE-12, CELL_SIZE-12);
+      ctx.restore();
+    } else {
+      ctx.fillText(trapEmoji, x+CELL_SIZE/2, y+CELL_SIZE/2+4);
+    }
+  }
+  else {
+    if (safeImg && safeImg.naturalWidth) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x+6, y+6, CELL_SIZE-12, CELL_SIZE-12); ctx.clip();
+      const s = Math.min(safeImg.naturalWidth, safeImg.naturalHeight);
+      ctx.drawImage(safeImg, (safeImg.naturalWidth-s)/2, (safeImg.naturalHeight-s)/2, s, s, x+6, y+6, CELL_SIZE-12, CELL_SIZE-12);
+      ctx.restore();
+    } else {
+      ctx.fillText('✅', x+CELL_SIZE/2, y+CELL_SIZE/2+4);
+    }
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, 600, 600);
+  const now = performance.now() / 1000;
+  if (showAll && (now - showStartTime) > SHOW_DURATION) showAll = false;
+
+  let revealedSafe = 0;
+  for (let r=0; r<ROWS; r++) {
+    for (let c=0; c<COLS; c++) {
+      const isTrap = grid[r][c] === 1;
+      const isRevealed = revealed[r][c];
+      if (showAll || isRevealed) {
+        drawCell(r, c, isTrap ? 1 : 0, false);
+        if (!isTrap && isRevealed) revealedSafe++;
+      } else {
+        drawCell(r, c, 0, true);
+      }
+    }
+  }
+
+  // فوز بالمستوى
+  if (revealedSafe === totalSafe() && !gameOver && !showAll) {
+    win = true;
+    gameOver = true;
+    score += 50;
+    scoreDisplay.textContent = score;
+    messageEl.style.color = '#4ecca3';
+    if (level < MAX_LEVEL) {
+      messageEl.textContent = '🎉 نجحت في المستوى ' + level;
+      nextBtn.style.display = 'inline-block';
+    } else {
+      messageEl.textContent = '🏆 أنهيت كل المستويات!';
+    }
+    sndWin();
+    updateBest();
+  }
+}
+
+function updateBest() {
+  if (score > bestScore) {
+    bestScore = score;
+    saveBest(bestScore);
+    bestDisplay.textContent = bestScore;
+  }
+}
+
+function handleClick(e) {
+  if (gameOver || showAll) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+  const col = Math.floor(x / CELL_SIZE);
+  const row = Math.floor(y / CELL_SIZE);
+  if (row<0 || row>=ROWS || col<0 || col>=COLS) return;
+  if (revealed[row][col]) return;
+
+  revealed[row][col] = true;
+  if (grid[row][col] === 1) {
+    gameOver = true;
+    messageEl.textContent = '💀 خسرت!';
+    messageEl.style.color = '#e94560';
+    sndTrap();
+    updateBest();
+  } else {
+    score += 10;
+    scoreDisplay.textContent = score;
+    sndClick();
+  }
+  draw();
+}
+
+canvas.addEventListener('click', handleClick);
+document.getElementById('restartBtn').addEventListener('click', resetGame);
+nextBtn.addEventListener('click', nextLevel);
+
+resetGame();
+
+function loop() {
+  if (showAll) draw();
+  requestAnimationFrame(loop);
+}
+loop();
+
+document.addEventListener('click', ()=>ensureAudio(), {once:true});
+</script>
+</body>
+</html>
